@@ -25,8 +25,21 @@ lrb = 5 * lr
 gamma = 0.999
 EPISODES = 2500;
 
+
+class workers:
+    workers = []
+    def __init__(self):
+        for i in range (4):
+            workers.append(Agent(lr, gamma, obs_dims, num_actions, lrb))
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+
 class Agent:
     def __init__(self, lr, GAMMA, obs_dims, num_actions, lrb):
+        Thread.__init__(self)
+        self.lock = Lock()
         self.lr = lr
         self.num_actions = num_actions
         self.obs_dims = obs_dims
@@ -61,7 +74,6 @@ class Agent:
         policy.summary()
         return actor, critic, policy
 
-
     def choose_action(self, state):
         state = state[np.newaxis, :]
         probability = self.policy.predict(state)[0]
@@ -88,7 +100,7 @@ class Agent:
 
 
 
-agent = Agent(lr, gamma, obs_dims, num_actions, lrb)
+Agent = workers
 ep_rewards = []
 avg_rews = 0
 
@@ -107,12 +119,12 @@ for episode in range (1, EPISODES):
             env.render()
         # if avg_rews > 200:
         #     env.render()
-        action = agent.choose_action(state)
+        action = Agent.choose_action(state)
         next_state, reward, done, _ = env.step(action)
 
         ep_reward+= reward
         state = next_state
-        agent.train(state, action, reward, next_state, done)
+        Agent.train(state, action, reward, next_state, done)
 
         step += 1
 

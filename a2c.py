@@ -21,7 +21,7 @@ obs_shape = (obs_dims,)
 lr = 0.00001
 lrb = 5 * lr
 gamma = 0.999
-EPISODES = 2500;
+EPISODES = 5000;
 
 class Agent:
     def __init__(self, lr, GAMMA, obs_dims, num_actions, lrb):
@@ -40,7 +40,8 @@ class Agent:
         delta = layers.Input(shape = [1])
         dense1 = layers.Dense(512, activation = 'relu')(input)
         dense2 = layers.Dense(512, activation = 'relu')(dense1)
-        dense2 = layers.Dense(512, activation = 'relu')(dense2)
+        dense2 = layers.Dense(132, activation = 'relu')(dense2)
+        dense2 = layers.Dense(64, activation = 'relu')(dense2)
         probs = layers.Dense(self.num_actions, activation = 'softmax')(dense2)
         values = layers.Dense(1, activation = 'linear')(dense2)
 
@@ -81,8 +82,6 @@ class Agent:
 
         self.actor.fit([state, delta], actions, verbose = 0)
         self.critic.fit(state, target, verbose = 0)
-
-
 
 agent = Agent(lr, gamma, obs_dims, num_actions, lrb)
 ep_rewards = []
