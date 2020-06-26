@@ -1,194 +1,149 @@
 import tensorflow as tf
 import keras
-import gym
-import threading
-import multiprocessing
-from keras import layers
-from queue import Queue
+from keras import backend as K
+from keras import layers, models, optimizers
 import numpy as np
-#defines
-lr = 0.000025
-EPISODES = 3000
-UPDATE_FREQ = 5
+import gym
+from keras.callbacks import TensorBoard
+from collections import deque
+import time
+import os
+import random
+import matplotlib.pyplot as plt
+from keras import backend as K
+from keras.models import Model, load_model
+from utils import push_and_pull, record
+import multiprocessing as mp
+import os
+os.environ["OMP_NUM_THREADS"] = "1"
 
-##setup env
-#https://medium.com/tensorflow/deep-reinforcement-learning-playing-cartpole-through-asynchronous-advantage-actor-critic-a3c-7eab2eea5296
-#https://github.com/smtkymt/A3C/blob/master/a3c/__init__.py
-#the network
-env = gym.make("LunarLander-v2")
+
+env = gym.make('LunarLander-v2')
+env.unwrapped
 num_actions = env.action_space.n
 obs_dims = env.observation_space.shape[0]
+obs_shape = (obs_dims,)
+lr = 0.00001
+lrb = 5 * lr
+gamma = 0.999
+EPISODES = 5000;
 
-class Model(keras.Model):
-    def __init__(self, obs_dims, num_actions):
-        super(Model, self).__init__()
-        self.num_actions = num_actions
-        self.obs_dims = obs_dims
-
-        self.dense1 = layers.Dense(512, activation = 'relu')
-        self.dense2 = layers.Dense(512, activation = 'relu')
-        self.dense3 = layers.Dense(512, activation = 'relu')
-        self.dense4 = layers.Dense(512, activation = 'relu')
-        self.policy_logits = layers.Dense(self.num_actions, activation = 'softmax')
-        self.values = layers.Dense(1, activation = 'linear')
-
-        def call(self, inputs):
-    # Forward pass
-            x = self.dense1(inputs)
-            x = self.dense2(x)
-            logits = self.policy_logits(x)
-            v1 = self.dense3(inputs)
-            v1 = self.dense4(v1)
-            values = self.values(v1)
-            return logits, values
-class Master():
-    def __init__(self, obs_dims, num_actions, lr):
-        self.obs_dims = obs_dims
-        self.num_actions = num_actions
+class Agent:
+    def __init__(self, lr, GAMMA, obs_dims, num_actions, lrb):
         self.lr = lr
-        self.global_model = Model(self.obs_dims, self.num_actions)
-        self.opt = tf.compat.v1.train.AdamOptimizer(self.lr, use_locking=True)
-        self.global_model(tf.convert_to_tensor(np.random.random((1, self.obs_dims)), dtype=tf.float32))
-
-    def train(self):
-        res_queue = Queue()
-
-        workers = [Worker(self.obs_dims,
-                          self.num_actions,
-                          self.global_model,
-                          self.opt,
-                          res_queue, i) for i in range(multiprocessing.cpu_count())]
-
-        for i, worker in enumerate(workers):
-            print("starting {}th worker".format(i))
-            worker.start()
-
-        avg_rews = []
-        while True:
-            reward = res_queue.get()
-            if reward is not None:
-                avg_rews.append(reward)
-            else:
-                break
-        [w.join() for w in workers]
-
-        plt.plot(moving_average_rewards)
-        plt.ylabel('Moving average ep reward')
-        plt.xlabel('Step')
-        plt.savefig(os.path.join(self.save_dir,'{} Moving Average.png'.format(self.game_name)))
-        plt.show()
-
-class Memory:
-    def __init__(self):
-        self.states = []
-        self.actions = []
-        self.rewards = []
-
-    def store(self, state, action, reward):
-        self.states.append(state)
-        self.actions.append(action)
-        self.rewards.append(reward)
-
-    def clear(self):
-        self.states = []
-        self.actions = []
-        self.rewards = []
-
-class Worker(threading.Thread):
-    global_episode = 0
-    global_avg_reward = 0
-    best = 0
-    save_lock = threading.Lock()
-
-    def __init__(self,
-                 obs_dims,
-                 num_actions,
-                 global_model,
-                 res_queue,
-                 opt,
-                 idx):
-        super(Worker, self).__init__()
-        self.obs_dims = obs_dims
         self.num_actions = num_actions
-        self.global_model = global_model
-        self.res_queue = res_queue
-        self.worker_idx = idx
-        self.local_model = Model(self.obs_dims, self.num_actions)
-        self.loss = 0.0
+        self.obs_dims = obs_dims
+        self.gamma = gamma
+        self.num_actions = num_actions
+        self.obs_dims = obs_dims
+        self.lrb = lrb
+        self.actor, self.critic, self.policy = self.build_model()
+
+
+def build_model(self):
+    input = layers.Input(shape = (obs_dims,))
+    delta = layers.Input(shape = [1])
+    dense1 = layers.Dense(512, activation = 'relu')(input)
+    dense2 = layers.Dense(512, activation = 'relu')(dense1)
+    dense2 = layers.Dense(132, activation = 'relu')(dense2)
+    dense2 = layers.Dense(64, activation = 'relu')(dense2)
+    probs = layers.Dense(num_actions, activation = 'softmax')(dense2)
+    values = layers.Dense(1, activation = 'linear')(dense2)
+
+    def loss(y_true, y_pred):
+        w = K.clip(y_pred, 1e-7, 1-1e-7)
+        x = y_true * K.log(w)
+        return K.sum(-x * delta)
+
+    actor = Model(input = [input, delta], output = [probs])
+    actor.compile(optimizer = optimizers.Adam(lr = lr), loss = loss)
+    actor.summary()
+    critic = Model(input = [input], output = [values])
+    critic.compile(optimizer = optimizers.Adam(lr = lrb), loss = 'mse')
+    critic.summary()
+    policy = Model(input = [input], output = [probs])
+    policy.summary()
+    return actor, critic, policy
+
+class Worker(mp.Process):
+    def __init__(self, gnet, opt, global_ep, res_queue, name):
+        super(Worker, self).__init__()
+        self.g_ep, self.g_ep_r, self.res_queue = global_ep, global_ep_reward, res_queue
+        self.gnet = gnet
+        self.lnet = build_model()           # local network
+        self.env = gym.make('CartPole-v0').unwrapped
+
+    def train(self, state, action, reward, next_state, done):
+        state = state[np.newaxis, :]
+        next_state = next_state[np.newaxis, :]
+        critic_val_ = self.critic.predict(next_state)
+        critic_val = self.critic.predict(state)
+
+        target = reward + self.gamma * critic_val_ * (1- int(done))
+        delta = target - critic_val
+
+        actions = np.zeros([1, self.num_actions])
+        actions[np.arange(1), action] = 1
+
+        self.actor.fit([state, delta], actions, verbose = 0)
+        self.critic.fit(state, target, verbose = 0)
+
+    def choose_action(self, state):
+        state = state[np.newaxis, :]
+        probability = self.policy.predict(state)[0]
+        #probability = np.nan_to_num(probability)
+        action = np.random.choice(num_actions, p= probability)
+        return action
 
     def run(self):
-        tot_steps = 1
-        mem = Memory()
-        while Worker.global_episode < EPISODES:
-            current_state = env.reset()
-            mem.clear
-            ep_reward = 0
-            step = 0
-            self.loss = 0
+        total_step = 1
+        while self.g_ep.value < EPISODES:
+            state = self.env.reset()
+            buffer_s, buffer_a, buffer_r = [], [], []
             done = False
             while not done:
-                logits, _ = self.local_model()
-                tf.convert_to_tensor(current_state[None, :], dtype=tf.float32)
-                probs = tf.nn.softmax(logits)
+                action = self.choose_action(state)
+                next_state, reward, done, _ = self.env.step(action)
+                ep_reward += reward
+                state = next_state
+                self.train
+                buffer_a.append(action)
+                buffer_s.append(state)
+                buffer_r.append(reward)
 
-                action = np.random.choise(self.num_actions, p=probs.numpy()[0])
-                new_state, reward, done, _ = env.step(action)
-                ep_reward += rewards
-                mem.store(state, action, reward)
-                step += 1
+                if total_step % UPDATE_FREQ == 0 or done:  # update global and assign to local net
+                    # sync
+                    push_and_pull(self.opt, self.lnet, self.gnet, done, s_, buffer_s, buffer_a, buffer_r, GAMMA)
+                    buffer_s, buffer_a, buffer_r = [], [], []
 
-                if step % UPDATE_FREQ == 0:
+                    if done:  # done and print information
+                        record(self.g_ep, self.g_ep_r, ep_r, self.res_queue, self.name)
+                        break
+                s = s_
+                total_step += 1
+        self.res_queue.put(None)
 
-                    with tf.GradientTape() as tape:
-                        tot_loss = self.compute_loss(done, new_state, mem, GAMMA)
 
-                    self.loss += tot_loss
-                    #calculating the local gradients of the network
-                    grads = tape.gradient(total_loss, self.local_model.trainable_weights)
-                    #push local gradients onto the global model
-                    self.opt.apply_gradients(zip(grads, self.global_model.trainable_weights))
+if __name__ == "__main__":
+    gnet = build_model()        # global network
+    gnet.share_memory()         # share the global parameters in multiprocessing
+    #opt = SharedAdam(gnet.parameters(), lr=1e-4, betas=(0.92, 0.999))      # global optimizer
+    global_ep, global_ep_reward, res_queue = mp.Value('i', 0), mp.Value('d', 0.), mp.Queue()
 
-                    mem.clear()
-
-                    if done:
-                        Worker.global_avg_reward = record(Worker.global_episode, ep_reward, self.worker_idx, Worker.global_avg_reward, self.res_queue, self.loss, self.step)
-                        Worker.global_episode += 1
-                        print("episode : ", Worker.global_episode, "reward : ", ep_reward, "global average: ", Worker.global_avg_reward)
-
-                    step +=1
-                    current_state = new_state
-                    tot_steps +=1
-                self.res_queue.put(None)
-
-    def compute_loss(self, done, new_state, mem, gamma=0.999):
-        if done:
-            reward_sum = 0
+    # parallel training
+    workers = [Worker(gnet, global_ep, global_ep_reward, res_queue, i) for i in range(mp.cpu_count())]
+    [w.start() for w in workers]
+    res = []                    # record episode reward to plot
+    while True:
+        reward = res_queue.get()
+        if r is not None:
+            res.append(reward)
         else:
-            reward_sum = self.local_model(tf.convert_to_tensor(new_state[None, :], dtype=tf.float32))[-1].numpy()[0]
+            break
+    [w.join() for w in workers]
 
-        discounted_rewards = []
-
-        for reward in mem.rewards[::-1]:
-            reward_sum = reward + gamma * reward_sum
-            discounted_rewards.append(reward_sum)
-        discounted_rewards.reverse()
-
-        logits, values = self.local_model(tf.convert_to_tensor(np.vstack(mem.states), dtype= tf.float32))
-
-        advantage = tf.convert_to_tensor(np.array(discounted_rewards)[:, None], dtype = tf.float32) - values
-
-        value_loss = advantage ** 2
-
-        actions = tf.one_hot(mem.actions, self.num_actions, dtype = tf.float32)
-
-        policy = tf.nn.softmax_cross_entropy_logits_v2(labels = actions, logits = logits)
-        entropy = tf.reduce_sum(policy * tf.log(policy + 1e-20), axis = 1)
-
-
-        policy_loss *= tf.stop_gradient(advantage)
-        policy_loss -= 0.01 * entropy
-        tot_loss = tf.reduce_mean(0.5 * value_loss + policy_loss)
-
-        return tot_loss
-
-agent = Master(obs_dims, num_actions, lr)
+    import matplotlib.pyplot as plt
+    plt.plot(res)
+    plt.ylabel('Moving average ep reward')
+    plt.xlabel('Step')
+    plt.show()

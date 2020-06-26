@@ -1,0 +1,3 @@
+[submodule "trpo_copy_tut"]
+	path = trpo_copy_tut
+	url = https://github.com/spideralessio/TRPO-Tensorflow2.git
