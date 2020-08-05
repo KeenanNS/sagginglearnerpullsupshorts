@@ -1,3 +1,3 @@
-# 90% plagarized
+# 80% plagarized
 
 
