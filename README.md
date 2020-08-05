@@ -1,4 +1,3 @@
-# mostly copied work. not smart enough to do on own
-
+# 90% plagarized
 
 
